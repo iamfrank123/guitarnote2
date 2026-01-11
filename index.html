@@ -494,7 +494,149 @@
                 }
             }
 
-            return { initAudioContext, playNote, resumeAudioContext, cleanupAudioContext };
+            let pianoBuffers = {};
+            const PIANO_NOTES = [
+                // Anchors: C, E, G, A per octave (C2-C6) - Naturals only to avoid URL encoding issues
+                { note: 'C2', midi: 36 }, { note: 'E2', midi: 40 }, { note: 'G2', midi: 43 }, { note: 'A2', midi: 45 },
+                { note: 'C3', midi: 48 }, { note: 'E3', midi: 52 }, { note: 'G3', midi: 55 }, { note: 'A3', midi: 57 },
+                { note: 'C4', midi: 60 }, { note: 'E4', midi: 64 }, { note: 'G4', midi: 67 }, { note: 'A4', midi: 69 },
+                { note: 'C5', midi: 72 }, { note: 'E5', midi: 76 }, { note: 'G5', midi: 79 }, { note: 'A5', midi: 81 },
+                { note: 'C6', midi: 84 }
+            ];
+
+            async function loadPianoSamples() {
+                if (Object.keys(pianoBuffers).length > 0) return; // Already loaded
+
+                initAudioContext();
+                const promises = PIANO_NOTES.map(async (n) => {
+                    try {
+                        // Using 'salamander-piano-mp3' from unpkg (Files are named {Note}{Octave}.mp3 e.g. C4.mp3)
+                        const response = await fetch(`https://unpkg.com/@audio-samples/piano-mp3-pedals@1.0.3/audio/${n.note}.mp3`);
+                        const arrayBuffer = await response.arrayBuffer();
+                        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                        pianoBuffers[n.midi] = { buffer: audioBuffer, note: n.note };
+                    } catch (e) {
+                        console.warn(`Failed to load piano sample ${n.note}`, e);
+                    }
+                });
+
+                await Promise.all(promises);
+                console.log('🎹 Salamander Piano Samples Loaded');
+            }
+
+            function playPianoSample(freq, now) {
+                if (Object.keys(pianoBuffers).length === 0) {
+                    // Fallback if samples not loaded
+                    return false;
+                }
+
+                // Calculate target MIDI
+                const midi = 69 + 12 * Math.log2(freq / 440);
+
+                // Find closest available sample
+                let closestMidi = -1;
+                let minDist = Infinity;
+
+                for (const m of Object.keys(pianoBuffers).map(Number)) {
+                    const dist = Math.abs(m - midi);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        closestMidi = m;
+                    }
+                }
+
+                if (closestMidi === -1) return false;
+
+                const sample = pianoBuffers[closestMidi];
+                const source = audioContext.createBufferSource();
+                source.buffer = sample.buffer;
+
+                // Calculate playback rate for pitch shift
+                // rate = 2 ^ ((targetMidi - baseMidi) / 12)
+                const semitoneDiff = midi - closestMidi;
+                const rate = Math.pow(2, semitoneDiff / 12);
+
+                source.playbackRate.value = rate;
+
+                // Envelope for smooth release
+                const gain = audioContext.createGain();
+                gain.gain.setValueAtTime(0.8, now); // Volume adjustment
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 4.0); // Natural decay
+
+                source.connect(gain);
+                gain.connect(masterGain);
+                source.start(now);
+
+                return true;
+            }
+
+            function playNote(freq, instrument = 'guitar') {
+                if (!freq) return;
+                if (!audioContext) initAudioContext();
+                const now = audioContext.currentTime;
+
+                if (instrument === 'guitar') {
+                    // REFINED: Classical Guitar (Nylon String Simulation)
+                    // Softer brightness (freq * 4) and warmer triangle resonance
+                    const osc = audioContext.createOscillator();
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(freq, now);
+
+                    // Pluck filter (LowPass) - Warmer for classical
+                    const filter = audioContext.createBiquadFilter();
+                    filter.type = 'lowpass';
+                    filter.frequency.setValueAtTime(freq * 4, now); // Softer pluck
+                    filter.frequency.exponentialRampToValueAtTime(freq, now + 0.25);
+
+                    const gain = audioContext.createGain();
+                    gain.gain.setValueAtTime(0, now);
+                    gain.gain.linearRampToValueAtTime(0.4, now + 0.015); // Slightly slower attack for nylon feeling
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 3.0); // Longer sustain
+
+                    osc.connect(filter);
+                    filter.connect(gain);
+                    gain.connect(masterGain);
+                    osc.start(now);
+                    osc.stop(now + 3.0);
+
+                    // Body Resonance (Warmer)
+                    const body = audioContext.createOscillator();
+                    body.type = 'triangle';
+                    body.frequency.setValueAtTime(freq, now);
+                    const bodyGain = audioContext.createGain();
+                    bodyGain.gain.setValueAtTime(0, now);
+                    bodyGain.gain.linearRampToValueAtTime(0.12, now + 0.02);
+                    bodyGain.gain.exponentialRampToValueAtTime(0.001, now + 1.5);
+
+                    body.connect(bodyGain);
+                    bodyGain.connect(masterGain);
+                    body.start(now);
+                    body.stop(now + 1.5);
+
+                } else {
+                    // Salamander Piano (Sample-based)
+                    const played = playPianoSample(freq, now);
+
+                    // Fallback to synthesis if samples haven't loaded
+                    if (!played) {
+                        // ... legacy synth code as fallback ...
+                        const duration = 2.5;
+                        const osc1 = audioContext.createOscillator();
+                        osc1.type = 'sine';
+                        osc1.frequency.setValueAtTime(freq, now);
+                        const gain1 = audioContext.createGain();
+                        gain1.gain.setValueAtTime(0, now);
+                        gain1.gain.linearRampToValueAtTime(0.5, now + 0.01);
+                        gain1.gain.exponentialRampToValueAtTime(0.001, now + duration);
+                        osc1.connect(gain1);
+                        gain1.connect(masterGain);
+                        osc1.start(now);
+                        osc1.stop(now + duration);
+                    }
+                }
+            }
+
+            return { initAudioContext, playNote, resumeAudioContext, cleanupAudioContext, loadPianoSamples };
         })();
 
         // ========== PITCH DETECTOR MODULE (Meyda-based) ==========
@@ -960,6 +1102,9 @@
             }, [validNotes, currentNote, instrument]);
 
             useEffect(() => {
+                // Preload piano samples on mount
+                audioEngine.loadPianoSamples();
+
                 if (isTimerRunning) {
                     timerIntervalRef.current = setInterval(() => {
                         if (timerStartRef.current) {
