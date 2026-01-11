@@ -1466,6 +1466,14 @@
                             <div className="lg:col-span-3 space-y-4">
                                 <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 space-y-4">
                                     <h2 className="text-xl font-bold text-white mb-4">Status</h2>
+                                    <MIDISelector
+                                        devices={midiDevices}
+                                        selectedDevice={selectedMidiDevice ? selectedMidiDevice.id : null}
+                                        onSelect={handleMIDIDeviceSelect}
+                                        onRequestAccess={requestMIDIAccess}
+                                        status={midiStatus}
+                                        labels={t}
+                                    />
                                     <MicrophoneStatus permission={micPermission} onRequestPermission={requestMicPermission} labels={t} />
                                     {isActive && (
                                         <>
