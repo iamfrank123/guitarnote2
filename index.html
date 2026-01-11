@@ -867,6 +867,7 @@
             const [currentNote, setCurrentNote] = useState(null);
             const currentNoteRef = useRef(null); // Fix stale closure bug
             const isProcessingRef = useRef(false); // Lock per debounce
+            const isSystemPlayingRef = useRef(false); // Lock per evitare feedback loop (audio sistema -> microfono)
             const [noteHistory, setNoteHistory] = useState([]);
             const [historyIndex, setHistoryIndex] = useState(-1);
             const [micPermission, setMicPermission] = useState('prompt');
@@ -897,6 +898,18 @@
                 return uniqueNotes;
             }, [selectedKeys, scale, instrument]);
 
+            const playSystemNote = useCallback((freq, inst) => {
+                isSystemPlayingRef.current = true;
+                // Blocca il rilevamento per 750ms mentre suona l'audio del sistema
+                setTimeout(() => {
+                    isSystemPlayingRef.current = false;
+                }, 750);
+
+                audioEngine.resumeAudioContext().then(() => {
+                    audioEngine.playNote(freq, inst);
+                });
+            }, []);
+
             const toggleKey = useCallback((k) => {
                 setSelectedKeys(prev => {
                     if (prev.includes(k)) {
@@ -919,9 +932,7 @@
                 setHistoryIndex(prev => prev + 1);
                 isProcessingRef.current = false; // Unlock detection
 
-                audioEngine.resumeAudioContext().then(() => {
-                    audioEngine.playNote(newNote.frequency, instrument);
-                });
+                playSystemNote(newNote.frequency, instrument);
 
                 setFeedbackStatus('idle');
                 setFeedbackMessage('');
@@ -951,7 +962,8 @@
             }, []);
 
             const handlePitchDetected = useCallback((frequency) => {
-                if (isProcessingRef.current) return; // Ignore if already processing success
+                // Ignore if processing success OR if system is playing audio (feedback prevention)
+                if (isProcessingRef.current || isSystemPlayingRef.current) return;
 
                 const target = currentNoteRef.current; // Use ref instead of state
                 console.log('📊 handlePitchDetected called - Target:', target ? `${target.note}${target.octave}` : 'NULL');
@@ -1034,8 +1046,8 @@
                 setFeedbackStatus('idle');
                 stopTimer();
                 resetTimer();
-                audioEngine.playNote(note.frequency, instrument);
-            }, [historyIndex, noteHistory, instrument, stopTimer, resetTimer]);
+                playSystemNote(note.frequency, instrument);
+            }, [historyIndex, noteHistory, instrument, stopTimer, resetTimer, playSystemNote]);
 
             const goToNextNote = useCallback(() => {
                 if (autoMode) return;
@@ -1048,11 +1060,11 @@
                     setFeedbackStatus('idle');
                     stopTimer();
                     resetTimer();
-                    audioEngine.playNote(note.frequency, instrument);
+                    playSystemNote(note.frequency, instrument);
                 } else {
                     generateNewNote();
                 }
-            }, [autoMode, historyIndex, noteHistory, instrument, generateNewNote, stopTimer, resetTimer]);
+            }, [autoMode, historyIndex, noteHistory, instrument, generateNewNote, stopTimer, resetTimer, playSystemNote]);
 
             const requestMicPermission = useCallback(async () => {
                 const result = await pitchDetector.startPitchDetection(handlePitchDetected, handleVolumeUpdate);
