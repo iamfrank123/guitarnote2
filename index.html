@@ -948,9 +948,9 @@
                     ${!canGoPrevious ? 'bg-white/10 text-white/40 disabled-opacity' : 'bg-white/20 text-white hover:bg-white/30'}`}>
                         <span>◀</span><span>{labels.prev}</span>
                     </button>
-                    <button onClick={onNext} disabled={!canGoNext || autoMode}
+                    <button onClick={onNext} disabled={false}
                         className={`flex-1 px-6 py-3 rounded-lg font-semibold btn-hover flex items-center justify-center gap-2
-                    ${!canGoNext || autoMode ? 'bg-white/10 text-white/40 disabled-opacity' : 'bg-white/20 text-white hover:bg-white/30'}`}>
+                    bg-white/20 text-white hover:bg-white/30`}>
                         <span>{labels.next}</span><span>▶</span>
                     </button>
                 </div>
@@ -1201,7 +1201,7 @@
             }, [historyIndex, noteHistory, instrument, stopTimer, resetTimer, playSystemNote]);
 
             const goToNextNote = useCallback(() => {
-                if (autoMode) return;
+                // Remove autoMode check to allow manual override
                 if (historyIndex < noteHistory.length - 1) {
                     const newIndex = historyIndex + 1;
                     const note = noteHistory[newIndex];
@@ -1233,7 +1233,7 @@
                 <div className="min-h-screen p-4 md:p-8 relative">
                     <LanguageToggle lang={lang} onToggle={setLang} />
                     <div className="max-w-7xl mx-auto">
-                        <div className="text-center mb-8">
+                        <div className="text-center mb-8 mt-16">
                             <h1 className="text-4xl md:text-5xl font-bold text-white mb-2">🎵 {t.title}</h1>
                         </div>
 
