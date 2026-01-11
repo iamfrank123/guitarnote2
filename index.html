@@ -1146,6 +1146,12 @@
                 return notes;
             }, [selectedKeys, instrument]);
 
+            // REF per accesso immediato allo stato aggiornato (fix per timeout closure steleness)
+            const validNotesRef = useRef(validNotes);
+            useEffect(() => {
+                validNotesRef.current = validNotes;
+            }, [validNotes]);
+
             const playSystemNote = useCallback((freq, inst) => {
                 // Cancella timer precedente se l'utente clicca velocemente
                 if (systemPlayTimeoutRef.current) {
@@ -1178,7 +1184,10 @@
             }, []);
 
             const generateNewNote = useCallback(() => {
-                const newNote = musicTheory.getRandomNote(validNotes, currentNoteRef.current);
+                // Use REF instead of state to ensure we always get the LATEST selection
+                // even if this function was called from a timeout set 1.5s ago
+                const currentPool = validNotesRef.current;
+                const newNote = musicTheory.getRandomNote(currentPool, currentNoteRef.current);
                 if (!newNote) return;
 
                 setCurrentNote(newNote);
