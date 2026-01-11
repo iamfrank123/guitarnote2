@@ -566,15 +566,19 @@
             const smoothingAlpha = 0.65;
             const noteStrings = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
+            // Moving average buffer per stabilità (3 samples)
+            let detectionBuffer = [];
+            const BUFFER_SIZE = 3;
+            const MIN_CONSISTENT_DETECTIONS = 2;
+
             function analyzeAudio(features) {
                 if (!features || !features.chroma) return;
 
                 const volume = features.rms || 0;
                 if (onVolumeUpdate) onVolumeUpdate(volume);
 
-                // THRESHOLD NORMALIZZATO (era 0.001)
-                // Impostalo a 0.02 o 0.03 per evitare rumori di fondo
-                if (volume < 0.02) return;
+                // THRESHOLD PIÙ ALTO per ridurre rumori di fondo (0.02 → 0.04)
+                if (volume < 0.04) return;
 
                 const inputChroma = features.chroma;
 
@@ -594,17 +598,48 @@
                     }
                 }
 
-                // 3. Confidence check PIÙ ALTA (era 0.2)
-                // Impostalo a 0.6 o 0.65 per essere sicuri che sia una nota pulita
-                if (maxChroma > 0.6) {
-                    // Calcola frequenza (assumendo ottava 3 per chitarra range medio)
-                    // C3 = 48 (130.81 Hz)
-                    const baseMidi = 48 + dominantNote;
+                // 3. CONFIDENCE CHECK PIÙ RESTRITTIVO (0.6 → 0.78)
+                if (maxChroma > 0.78) {
+                    // 4. RILEVAMENTO OTTAVA DINAMICO
+                    // Usa spectralCentroid per stimare ottava reale
+                    const spectralCentroid = features.spectralCentroid || 500;
+
+                    // Stima ottava dalla frequenza centrale dello spettro
+                    // Guitar range: E2 (82Hz) to E5 (659Hz)
+                    // Piano range: C2 (65Hz) to C6 (1047Hz)
+                    let estimatedOctave;
+                    if (spectralCentroid < 150) estimatedOctave = 2;
+                    else if (spectralCentroid < 300) estimatedOctave = 3;
+                    else if (spectralCentroid < 600) estimatedOctave = 4;
+                    else estimatedOctave = 5;
+
+                    const baseMidi = (estimatedOctave + 1) * 12 + dominantNote;
                     const frequency = 440 * Math.pow(2, (baseMidi - 69) / 12);
 
-                    console.log('🎵 MEYDA:', noteStrings[dominantNote], frequency.toFixed(2), 'Hz, Conf:', maxChroma.toFixed(3));
+                    // 5. MOVING AVERAGE SMOOTHING
+                    detectionBuffer.push({ note: dominantNote, freq: frequency, conf: maxChroma });
+                    if (detectionBuffer.length > BUFFER_SIZE) {
+                        detectionBuffer.shift();
+                    }
 
-                    if (onPitchDetected) onPitchDetected(frequency);
+                    // Richiedi almeno 2/3 rilevamenti consistenti
+                    if (detectionBuffer.length >= BUFFER_SIZE) {
+                        const noteCounts = {};
+                        detectionBuffer.forEach(d => {
+                            noteCounts[d.note] = (noteCounts[d.note] || 0) + 1;
+                        });
+
+                        const mostCommonNote = Object.keys(noteCounts).reduce((a, b) =>
+                            noteCounts[a] > noteCounts[b] ? a : b
+                        );
+
+                        if (noteCounts[mostCommonNote] >= MIN_CONSISTENT_DETECTIONS) {
+                            console.log('🎵 STABLE DETECTION:', noteStrings[mostCommonNote], frequency.toFixed(2), 'Hz, Conf:', maxChroma.toFixed(3));
+                            if (onPitchDetected) onPitchDetected(frequency);
+                            // Clear buffer dopo invio per evitare duplicati
+                            detectionBuffer = [];
+                        }
+                    }
                 }
             }
 
@@ -620,29 +655,37 @@
 
                     audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
 
-                    // LowShelf Filter: +12dB boost ai bassi
+                    // HIGHPASS Filter: elimina rumori sotto 80Hz (eliminazione ronzii)
+                    const highPass = audioContext.createBiquadFilter();
+                    highPass.type = "highpass";
+                    highPass.frequency.value = 80;
+                    highPass.Q.value = 0.7;
+
+                    // LowShelf Filter: +12dB boost ai bassi (chitarra)
                     const lowShelf = audioContext.createBiquadFilter();
                     lowShelf.type = "lowshelf";
                     lowShelf.frequency.value = 250;
                     lowShelf.gain.value = 12;
 
                     microphone = audioContext.createMediaStreamSource(mediaStream);
-                    microphone.connect(lowShelf);
+                    microphone.connect(highPass);
+                    highPass.connect(lowShelf);
 
                     meydaAnalyzer = Meyda.createMeydaAnalyzer({
                         audioContext: audioContext,
                         source: lowShelf,
                         bufferSize: 8192,
-                        featureExtractors: ["chroma", "rms"],
+                        featureExtractors: ["chroma", "rms", "spectralCentroid"],
                         callback: analyzeAudio
                     });
 
                     onPitchDetected = pitchCallback;
                     onVolumeUpdate = volumeCallback;
                     previousChroma.fill(0);
+                    detectionBuffer = [];
 
                     meydaAnalyzer.start();
-                    console.log('✅ Meyda Detector STARTED');
+                    console.log('✅ Meyda Detector STARTED (Enhanced Mode)');
 
                     return { success: true, permission: 'granted' };
                 } catch (error) {
@@ -1052,10 +1095,10 @@
             }, []);
 
             const handlePitchDetected = useCallback((frequency) => {
-                // Ignore if processing success OR if system is playing audio (feedback prevention)
+                // LOCK ANTICIPATO: blocca PRIMA di qualsiasi elaborazione
                 if (isProcessingRef.current || isSystemPlayingRef.current) return;
 
-                const target = currentNoteRef.current; // Use ref instead of state
+                const target = currentNoteRef.current;
                 console.log('📊 handlePitchDetected called - Target:', target ? `${target.note}${target.octave}` : 'NULL');
                 if (!target) {
                     console.warn('⚠️ No target note set!');
@@ -1070,37 +1113,42 @@
                     return;
                 }
 
+                // VALIDAZIONE COMPLETA: Nota E Ottava
                 const isCorrectNote = detected.note === target.note;
+                const isCorrectOctave = detected.octave === target.octave;
                 const cents = Math.abs(detected.cents);
 
                 console.log('🎯 Comparison:', {
                     detected: `${detected.note}${detected.octave}`,
                     target: `${target.note}${target.octave}`,
                     isCorrectNote,
+                    isCorrectOctave,
                     cents,
                     frequency: frequency.toFixed(2)
                 });
 
-                if (isCorrectNote && cents <= 25) {
-                    console.log('✅ CORRECT! Setting feedback to correct');
-                    console.log('>>> [Detection] autoMode:', autoModeRef.current);
-                    isProcessingRef.current = true; // Lock immediately
+                // FEEDBACK SEPARATI E MUTUAMENTE ESCLUSIVI
+                if (isCorrectNote && isCorrectOctave && cents <= 25) {
+                    // ✅ PERFETTO
+                    console.log('✅ CORRECT! (Note + Octave + Tuning)');
+                    isProcessingRef.current = true; // Lock PRIMA del setState
                     setFeedbackStatus('correct');
                     setFeedbackMessage('Corretto! / Correct!');
                     stopTimer();
                     if (autoModeRef.current) {
-                        // Delay aumentato a 1.5s (1500ms) come richiesto
                         setTimeout(() => generateNewNote(), 1500);
                     }
-                } else if (isCorrectNote && cents <= 50) {
-                    console.log('🟡 CLOSE! cents:', cents);
+                } else if (isCorrectNote && isCorrectOctave && cents <= 50) {
+                    // 🟡 VICINO (nota e ottava ok, ma intonazione non perfetta)
+                    console.log('🟡 CLOSE! (Note + Octave OK, but tuning off by', cents, 'cents)');
                     setFeedbackStatus('close');
                     setFeedbackMessage('Vicino! / Close!');
-                } else if (!isCorrectNote) {
-                    // Incorrect note logic
-                    console.log('❌ WRONG NOTE:', {
+                } else if (!isCorrectNote || !isCorrectOctave) {
+                    // ❌ SBAGLIATO (nota o ottava diverse)
+                    console.log('❌ WRONG:', {
                         detected: `${detected.note}${detected.octave}`,
-                        target: `${target.note}${target.octave}`
+                        target: `${target.note}${target.octave}`,
+                        reason: !isCorrectNote ? 'wrong note' : 'wrong octave'
                     });
                     setFeedbackStatus('wrong');
                     setFeedbackMessage(lang === 'it' ? 'Riprova' : 'Try again');
