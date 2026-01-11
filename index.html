@@ -480,6 +480,9 @@
             async function resumeAudioContext() {
                 if (audioContext && audioContext.state === 'suspended') {
                     await audioContext.resume();
+                } else if (!audioContext || audioContext.state === 'closed') {
+                    initAudioContext();
+                    if (audioContext.state === 'suspended') await audioContext.resume();
                 }
             }
 
@@ -874,7 +877,8 @@
             const [currentNote, setCurrentNote] = useState(null);
             const currentNoteRef = useRef(null); // Fix stale closure bug
             const isProcessingRef = useRef(false); // Lock per debounce
-            const isSystemPlayingRef = useRef(false); // Lock per evitare feedback loop (audio sistema -> microfono)
+            const isSystemPlayingRef = useRef(false); // Lock per evitare feedback loop
+            const systemPlayTimeoutRef = useRef(null); // Ref per il timer del lock audio
             const [noteHistory, setNoteHistory] = useState([]);
             const [historyIndex, setHistoryIndex] = useState(-1);
             const [micPermission, setMicPermission] = useState('prompt');
@@ -906,15 +910,22 @@
             }, [selectedKeys, scale, instrument]);
 
             const playSystemNote = useCallback((freq, inst) => {
+                // Cancella timer precedente se l'utente clicca velocemente
+                if (systemPlayTimeoutRef.current) {
+                    clearTimeout(systemPlayTimeoutRef.current);
+                }
+
                 isSystemPlayingRef.current = true;
-                // Blocca il rilevamento per 750ms mentre suona l'audio del sistema
-                setTimeout(() => {
+
+                // Blocca il rilevamento per 2000ms (2 secondi) come richiesto
+                systemPlayTimeoutRef.current = setTimeout(() => {
                     isSystemPlayingRef.current = false;
-                }, 750);
+                    systemPlayTimeoutRef.current = null;
+                }, 2000);
 
                 audioEngine.resumeAudioContext().then(() => {
                     audioEngine.playNote(freq, inst);
-                });
+                }).catch(err => console.error("Audio playback error:", err));
             }, []);
 
             const toggleKey = useCallback((k) => {
