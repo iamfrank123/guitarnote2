@@ -224,7 +224,15 @@
                 correct: "Corretto!",
                 close: "Vicino!",
                 wrong: "Riprova",
-                string: "Corda"
+                string: "Corda",
+                midiDevice: "Dispositivo MIDI",
+                enableMidi: "Abilita MIDI",
+                useMic: "Usa Microfono",
+                midiActive: "MIDI Connesso",
+                midiNotSupported: "MIDI non supportato",
+                octaveMode: "Controllo Ottava",
+                anyOctave: "🎵 Qualsiasi",
+                exactOctave: "🎯 Esatta"
             },
             en: {
                 title: "Musical Training",
@@ -258,7 +266,15 @@
                 correct: "Correct!",
                 close: "Close!",
                 wrong: "Try again",
-                string: "String"
+                string: "String",
+                midiDevice: "MIDI Device",
+                enableMidi: "Enable MIDI",
+                useMic: "Use Microphone",
+                midiActive: "MIDI Connected",
+                midiNotSupported: "MIDI not supported",
+                octaveMode: "Octave Check",
+                anyOctave: "🎵 Any",
+                exactOctave: "🎯 Exact"
             }
         };
 
@@ -379,6 +395,87 @@
                 NOTES_INTERNATIONAL, NOTES_LATIN, calculateFrequency, getNoteFromFrequency,
                 getValidNotes, getGuitarString, getNoteName, getRandomNote
             };
+        })();
+
+        // ========== MIDI INPUT MODULE ==========
+        const midiInput = (() => {
+            let midiAccess = null;
+            let activeInput = null;
+            let onNoteReceived = null;
+
+            async function requestMIDIAccess() {
+                if (!navigator.requestMIDIAccess) {
+                    return { success: false, error: 'MIDI not supported', devices: [] };
+                }
+
+                try {
+                    midiAccess = await navigator.requestMIDIAccess();
+                    const devices = Array.from(midiAccess.inputs.values()).map(input => ({
+                        id: input.id,
+                        name: input.name || 'Unknown MIDI Device',
+                        manufacturer: input.manufacturer || ''
+                    }));
+
+                    console.log('🎹 MIDI Access Granted:', devices.length, 'device(s)');
+                    return { success: true, devices };
+                } catch (error) {
+                    console.error('❌ MIDI Access Error:', error);
+                    return { success: false, error: error.message, devices: [] };
+                }
+            }
+
+            function connectToDevice(deviceId, noteCallback) {
+                if (!midiAccess) {
+                    console.error('❌ MIDI Access not initialized');
+                    return false;
+                }
+
+                const input = midiAccess.inputs.get(deviceId);
+                if (!input) {
+                    console.error('❌ Device not found:', deviceId);
+                    return false;
+                }
+
+                input.onmidimessage = (event) => {
+                    const [command, note, velocity] = event.data;
+
+                    // Note On: 144-159 (0x90-0x9F), velocity > 0
+                    // Note Off: 128-143 (0x80-0x8F) OR Note On with velocity 0
+                    const isNoteOn = (command >= 144 && command <= 159) && velocity > 0;
+
+                    if (isNoteOn) {
+                        const noteData = midiNoteToMusic(note);
+                        console.log('🎹 MIDI Note:', noteData.note + noteData.octave, 'MIDI#' + note, noteData.frequency.toFixed(2) + 'Hz');
+                        if (noteCallback) noteCallback(noteData);
+                    }
+                };
+
+                activeInput = input;
+                onNoteReceived = noteCallback;
+                console.log('✅ MIDI Connected:', input.name);
+                return true;
+            }
+
+            function midiNoteToMusic(midiNote) {
+                // MIDI Note 60 = C4 (Middle C)
+                const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+                const octave = Math.floor(midiNote / 12) - 1;
+                const noteName = noteNames[midiNote % 12];
+                const frequency = 440 * Math.pow(2, (midiNote - 69) / 12);
+
+                return { note: noteName, octave, frequency, cents: 0 };
+            }
+
+            function disconnect() {
+                if (activeInput) {
+                    activeInput.onmidimessage = null;
+                    activeInput = null;
+                    onNoteReceived = null;
+                    console.log('🛑 MIDI Disconnected');
+                }
+            }
+
+            return { requestMIDIAccess, connectToDevice, disconnect, midiNoteToMusic };
         })();
 
         // ========== AUDIO ENGINE MODULE ==========
@@ -598,22 +695,11 @@
                     }
                 }
 
-                // 3. CONFIDENCE CHECK PIÙ RESTRITTIVO (0.6 → 0.78)
-                if (maxChroma > 0.78) {
-                    // 4. RILEVAMENTO OTTAVA DINAMICO
-                    // Usa spectralCentroid per stimare ottava reale
-                    const spectralCentroid = features.spectralCentroid || 500;
-
-                    // Stima ottava dalla frequenza centrale dello spettro
-                    // Guitar range: E2 (82Hz) to E5 (659Hz)
-                    // Piano range: C2 (65Hz) to C6 (1047Hz)
-                    let estimatedOctave;
-                    if (spectralCentroid < 150) estimatedOctave = 2;
-                    else if (spectralCentroid < 300) estimatedOctave = 3;
-                    else if (spectralCentroid < 600) estimatedOctave = 4;
-                    else estimatedOctave = 5;
-
-                    const baseMidi = (estimatedOctave + 1) * 12 + dominantNote;
+                // 3. CONFIDENCE CHECK (Abbassato a 0.65 per migliore detection)
+                if (maxChroma > 0.65) {
+                    // 4. OTTAVA FISSA 4 (C4 = MIDI 60, migliore per chitarra/piano range medio)
+                    // SpectralCentroid rimosso perché inaffidabile
+                    const baseMidi = 60 + dominantNote; // C4 come riferimento
                     const frequency = 440 * Math.pow(2, (baseMidi - 69) / 12);
 
                     // 5. MOVING AVERAGE SMOOTHING
@@ -675,7 +761,7 @@
                         audioContext: audioContext,
                         source: lowShelf,
                         bufferSize: 8192,
-                        featureExtractors: ["chroma", "rms", "spectralCentroid"],
+                        featureExtractors: ["chroma", "rms"],
                         callback: analyzeAudio
                     });
 
@@ -685,7 +771,7 @@
                     detectionBuffer = [];
 
                     meydaAnalyzer.start();
-                    console.log('✅ Meyda Detector STARTED (Enhanced Mode)');
+                    console.log('✅ Meyda Detector STARTED (Simplified Octave Mode)');
 
                     return { success: true, permission: 'granted' };
                 } catch (error) {
@@ -805,6 +891,39 @@
                         {labels.manual}
                     </button>
                 </div>
+            </div>
+        ));
+
+
+
+        const MIDISelector = memo(({ devices, selectedDevice, onSelect, onRequestAccess, status, labels }) => (
+            <div className="space-y-2">
+                <label className="block text-white font-semibold text-sm">🎹 {labels.midiDevice}</label>
+                {status === 'not-requested' && (
+                    <button onClick={onRequestAccess}
+                        className="w-full px-4 py-3 bg-white/20 text-white rounded-lg btn-hover font-semibold text-sm">
+                        {labels.enableMidi}
+                    </button>
+                )}
+                {status === 'granted' && devices.length > 0 && (
+                    <select value={selectedDevice || ''} onChange={(e) => onSelect(e.target.value)}
+                        className="w-full px-4 py-3 rounded-lg bg-white/90 text-gray-800 font-semibold text-sm">
+                        <option value="">{labels.useMic}</option>
+                        {devices.map(d => (
+                            <option key={d.id} value={d.id}>{d.name}</option>
+                        ))}
+                    </select>
+                )}
+                {status === 'granted' && devices.length === 0 && (
+                    <div className="text-sm text-white/70 px-4 py-3 bg-white/10 rounded-lg">
+                        No MIDI devices found
+                    </div>
+                )}
+                {status === 'denied' && (
+                    <div className="text-sm text-red-300 px-4 py-3 bg-red-500/20 rounded-lg">
+                        {labels.midiNotSupported}
+                    </div>
+                )}
             </div>
         ));
 
@@ -969,6 +1088,13 @@
             const [historyIndex, setHistoryIndex] = useState(-1);
             const [micPermission, setMicPermission] = useState('prompt');
 
+            // MIDI State
+            const [midiDevices, setMidiDevices] = useState([]);
+            const [selectedMidiDevice, setSelectedMidiDevice] = useState(null);
+            const [midiStatus, setMidiStatus] = useState('not-requested'); // 'not-requested', 'granted', 'denied'
+
+
+
             const [detectedNote, setDetectedNote] = useState(null);
             const [feedbackStatus, setFeedbackStatus] = useState('idle');
             const [feedbackMessage, setFeedbackMessage] = useState('');
@@ -1113,24 +1239,22 @@
                     return;
                 }
 
-                // VALIDAZIONE COMPLETA: Nota E Ottava
+                // VALIDAZIONE: Solo Nota (Ottava ignorata come richiesto)
                 const isCorrectNote = detected.note === target.note;
-                const isCorrectOctave = detected.octave === target.octave;
                 const cents = Math.abs(detected.cents);
 
                 console.log('🎯 Comparison:', {
                     detected: `${detected.note}${detected.octave}`,
                     target: `${target.note}${target.octave}`,
                     isCorrectNote,
-                    isCorrectOctave,
                     cents,
                     frequency: frequency.toFixed(2)
                 });
 
                 // FEEDBACK SEPARATI E MUTUAMENTE ESCLUSIVI
-                if (isCorrectNote && isCorrectOctave && cents <= 25) {
-                    // ✅ PERFETTO
-                    console.log('✅ CORRECT! (Note + Octave + Tuning)');
+                if (isCorrectNote && cents <= 25) {
+                    // ✅ PERFETTO (Nota giusta, qualsiasi ottava)
+                    console.log('✅ CORRECT! (Note Match + Tuning)');
                     isProcessingRef.current = true; // Lock PRIMA del setState
                     setFeedbackStatus('correct');
                     setFeedbackMessage('Corretto! / Correct!');
@@ -1138,17 +1262,17 @@
                     if (autoModeRef.current) {
                         setTimeout(() => generateNewNote(), 1500);
                     }
-                } else if (isCorrectNote && isCorrectOctave && cents <= 50) {
-                    // 🟡 VICINO (nota e ottava ok, ma intonazione non perfetta)
-                    console.log('🟡 CLOSE! (Note + Octave OK, but tuning off by', cents, 'cents)');
+                } else if (isCorrectNote && cents <= 50) {
+                    // 🟡 VICINO (nota corretta, ma intonazione non perfetta)
+                    console.log('🟡 CLOSE! (Note Match, but tuning off by', cents, 'cents)');
                     setFeedbackStatus('close');
                     setFeedbackMessage('Vicino! / Close!');
-                } else if (!isCorrectNote || !isCorrectOctave) {
-                    // ❌ SBAGLIATO (nota o ottava diverse)
+                } else if (!isCorrectNote) {
+                    // ❌ SBAGLIATO (nota diversa)
                     console.log('❌ WRONG:', {
                         detected: `${detected.note}${detected.octave}`,
                         target: `${target.note}${target.octave}`,
-                        reason: !isCorrectNote ? 'wrong note' : 'wrong octave'
+                        reason: 'wrong note'
                     });
                     setFeedbackStatus('wrong');
                     setFeedbackMessage(lang === 'it' ? 'Riprova' : 'Try again');
@@ -1167,8 +1291,44 @@
                 }
             }, [handlePitchDetected, handleVolumeUpdate, generateNewNote]);
 
+            // MIDI Handlers
+            const requestMIDIAccess = useCallback(async () => {
+                const result = await midiInput.requestMIDIAccess();
+                if (result.success) {
+                    setMidiStatus('granted');
+                    setMidiDevices(result.devices);
+                    console.log('🎹 Found', result.devices.length, 'MIDI device(s)');
+                } else {
+                    setMidiStatus('denied');
+                    console.error('❌ MIDI Access Denied:', result.error);
+                }
+            }, []);
+
+            const handleMIDIDeviceSelect = useCallback((deviceId) => {
+                // Disconnect previous device
+                midiInput.disconnect();
+
+                if (!deviceId) {
+                    // User selected microphone
+                    setSelectedMidiDevice(null);
+                    console.log('🎤 Switched to Microphone input');
+                    return;
+                }
+
+                // Connect to MIDI device
+                const success = midiInput.connectToDevice(deviceId, handlePitchDetected);
+                if (success) {
+                    const device = midiDevices.find(d => d.id === deviceId);
+                    setSelectedMidiDevice(device);
+                    console.log('🎹 MIDI Device Connected:', device?.name);
+                } else {
+                    console.error('❌ Failed to connect to MIDI device');
+                }
+            }, [midiDevices, handlePitchDetected]);
+
             const stopSession = useCallback(() => {
                 pitchDetector.stopPitchDetection();
+                midiInput.disconnect(); // Disconnect MIDI too
                 setIsActive(false);
                 setCurrentNote(null);
                 currentNoteRef.current = null; // Clear ref too
