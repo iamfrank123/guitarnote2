@@ -331,18 +331,24 @@
 
             function getGuitarString(note, octave) {
                 const freq = calculateFrequency(note, octave);
+                if (!freq) return null;
+
+                const E2_FREQ = calculateFrequency('E', 2);
+
                 const ranges = [
-                    { string: 6, min: calculateFrequency('E', 2), max: calculateFrequency('G#', 2) },
+                    { string: 6, min: E2_FREQ, max: calculateFrequency('G#', 2) },
                     { string: 5, min: calculateFrequency('A', 2), max: calculateFrequency('C#', 3) },
                     { string: 4, min: calculateFrequency('D', 3), max: calculateFrequency('F#', 3) },
                     { string: 3, min: calculateFrequency('G', 3), max: calculateFrequency('B', 3) },
                     { string: 2, min: calculateFrequency('B', 3), max: calculateFrequency('D#', 4) },
                     { string: 1, min: calculateFrequency('E', 4), max: calculateFrequency('E', 5) }
                 ];
+
                 for (const r of ranges) {
                     if (freq >= r.min && freq <= r.max) return r.string;
                 }
-                return freq < calculateFrequency('E', 2) ? 6 : 1;
+
+                return freq < E2_FREQ ? 6 : 1;
             }
 
             function getNoteName(note, notation = 'international') {
@@ -357,6 +363,11 @@
                 if (!validNotes || validNotes.length === 0) return null;
                 let filtered = validNotes;
                 if (previousNote && validNotes.length > 1) {
+                    // Stricter filtering: Exclude same note name regardless of octave
+                    filtered = validNotes.filter(n => n.note !== previousNote.note);
+                }
+                // Fallback: if strictly filtering removes all notes (unlikely but safe), relax it
+                if (filtered.length === 0) {
                     filtered = validNotes.filter(n =>
                         n.note !== previousNote.note || n.octave !== previousNote.octave
                     );
@@ -383,98 +394,6 @@
                     masterGain.connect(audioContext.destination);
                 }
                 return audioContext;
-            }
-
-            function playNote(freq, instrument = 'guitar') {
-                if (!freq) return;
-                if (!audioContext) initAudioContext();
-                const now = audioContext.currentTime;
-
-                if (instrument === 'guitar') {
-                    // Realistic Guitar (Filtered Sawtooth + Body Resonance)
-                    const osc = audioContext.createOscillator();
-                    osc.type = 'sawtooth';
-                    osc.frequency.setValueAtTime(freq, now);
-
-                    // Pluck emulation with LowPass Filter
-                    const filter = audioContext.createBiquadFilter();
-                    filter.type = 'lowpass';
-                    filter.frequency.setValueAtTime(freq * 6, now); // Bright pluck start
-                    filter.frequency.exponentialRampToValueAtTime(freq, now + 0.3); // Quick dampening
-
-                    const gain = audioContext.createGain();
-                    gain.gain.setValueAtTime(0, now);
-                    gain.gain.linearRampToValueAtTime(0.4, now + 0.01); // Sharp attack
-                    gain.gain.exponentialRampToValueAtTime(0.001, now + 2.5); // Long sustain/release
-
-                    osc.connect(filter);
-                    filter.connect(gain);
-                    gain.connect(masterGain);
-                    osc.start(now);
-                    osc.stop(now + 2.5);
-
-                    // Resonance layer (Warmth)
-                    const body = audioContext.createOscillator();
-                    body.type = 'triangle';
-                    body.frequency.setValueAtTime(freq, now);
-                    const bodyGain = audioContext.createGain();
-                    bodyGain.gain.setValueAtTime(0, now);
-                    bodyGain.gain.linearRampToValueAtTime(0.1, now + 0.02);
-                    bodyGain.gain.exponentialRampToValueAtTime(0.001, now + 1.5);
-
-                    body.connect(bodyGain);
-                    bodyGain.connect(masterGain);
-                    body.start(now);
-                    body.stop(now + 1.5);
-
-                } else {
-                    // Realistic Piano (Additive Synthesis + Hammer Attack)
-                    const duration = 2.5;
-
-                    // Main string
-                    const osc1 = audioContext.createOscillator();
-                    osc1.type = 'sine';
-                    osc1.frequency.setValueAtTime(freq, now);
-
-                    const gain1 = audioContext.createGain();
-                    gain1.gain.setValueAtTime(0, now);
-                    gain1.gain.linearRampToValueAtTime(0.5, now + 0.01);
-                    gain1.gain.exponentialRampToValueAtTime(0.001, now + duration);
-
-                    // Harmonic overtone (Octave + slight detune)
-                    const osc2 = audioContext.createOscillator();
-                    osc2.type = 'sine';
-                    osc2.frequency.setValueAtTime(freq * 2.003, now);
-
-                    const gain2 = audioContext.createGain();
-                    gain2.gain.setValueAtTime(0, now);
-                    gain2.gain.linearRampToValueAtTime(0.15, now + 0.01);
-                    gain2.gain.exponentialRampToValueAtTime(0.001, now + duration * 0.8);
-
-                    // Transient (Hammer click)
-                    const click = audioContext.createOscillator();
-                    click.type = 'square';
-                    click.frequency.setValueAtTime(freq * 0.5, now);
-                    const clickGain = audioContext.createGain();
-                    clickGain.gain.setValueAtTime(0.05, now);
-                    clickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
-
-                    osc1.connect(gain1);
-                    osc2.connect(gain2);
-                    click.connect(clickGain);
-
-                    gain1.connect(masterGain);
-                    gain2.connect(masterGain);
-                    clickGain.connect(masterGain);
-
-                    osc1.start(now);
-                    osc2.start(now);
-                    click.start(now);
-
-                    osc1.stop(now + duration);
-                    osc2.stop(now + duration);
-                    click.stop(now + 0.05);
-                }
             }
 
             async function resumeAudioContext() {
@@ -1000,7 +919,7 @@
             const [selectedKeys, setSelectedKeys] = useState(['C']); // Changed to Array
             const [scale, setScale] = useState('major');
             const [notation, setNotation] = useState('international');
-            const [instrument, setInstrument] = useState('guitar');
+            const [instrument] = useState('guitar');
             const [autoMode, setAutoMode] = useState(true);
             const [isActive, setIsActive] = useState(false);
             const [currentNote, setCurrentNote] = useState(null);
@@ -1011,7 +930,7 @@
             const [noteHistory, setNoteHistory] = useState([]);
             const [historyIndex, setHistoryIndex] = useState(-1);
             const [micPermission, setMicPermission] = useState('prompt');
-            const [detectedPitch, setDetectedPitch] = useState(null);
+
             const [detectedNote, setDetectedNote] = useState(null);
             const [feedbackStatus, setFeedbackStatus] = useState('idle');
             const [feedbackMessage, setFeedbackMessage] = useState('');
@@ -1086,7 +1005,7 @@
                 setFeedbackMessage('');
                 setIsTimerRunning(true);
                 timerStartRef.current = Date.now();
-            }, [validNotes, currentNote, instrument]);
+            }, [validNotes]);
 
             useEffect(() => {
                 // Preload piano samples on mount
@@ -1123,7 +1042,6 @@
                     return;
                 }
 
-                setDetectedPitch(frequency);
                 const detected = musicTheory.getNoteFromFrequency(frequency);
                 setDetectedNote(detected);
 
@@ -1166,7 +1084,7 @@
                     setFeedbackStatus('wrong');
                     setFeedbackMessage(lang === 'it' ? 'Riprova' : 'Try again');
                 }
-            }, [autoMode, generateNewNote, stopTimer]);
+            }, [autoMode, generateNewNote, stopTimer, lang]);
 
             const handleVolumeUpdate = useCallback(vol => setVolume(vol), []);
 
@@ -1188,7 +1106,6 @@
                 setNoteHistory([]);
                 setHistoryIndex(-1);
                 setFeedbackStatus('idle');
-                setDetectedPitch(null);
                 setDetectedNote(null);
                 stopTimer();
                 resetTimer();
@@ -1204,7 +1121,6 @@
                 setFeedbackStatus('idle');
                 stopTimer();
                 resetTimer();
-                playSystemNote(note.frequency, instrument);
             }, [historyIndex, noteHistory, instrument, stopTimer, resetTimer, playSystemNote]);
 
             const goToNextNote = useCallback(() => {
@@ -1218,7 +1134,6 @@
                     setFeedbackStatus('idle');
                     stopTimer();
                     resetTimer();
-                    playSystemNote(note.frequency, instrument);
                 } else {
                     generateNewNote();
                 }
