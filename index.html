@@ -445,8 +445,9 @@
 
                     if (isNoteOn) {
                         const noteData = midiNoteToMusic(note);
-                        console.log('🎹 MIDI Note:', noteData.note + noteData.octave, 'MIDI#' + note, noteData.frequency.toFixed(2) + 'Hz');
-                        if (noteCallback) noteCallback(noteData);
+                        console.log('🎹 MIDI Note:', noteData.note + noteData.octave, 'MIDI#' + note, 'Vel:' + velocity);
+                        // Passa solo la frequenza per compatibilità con handlePitchDetected
+                        if (noteCallback) noteCallback(noteData.frequency);
                     }
                 };
 
@@ -1292,13 +1293,23 @@
 
             const startSession = useCallback(async () => {
                 audioEngine.initAudioContext();
-                const result = await pitchDetector.startPitchDetection(stablePitchHandler, stableVolumeHandler);
-                setMicPermission(result.permission);
-                if (result.success) {
+
+                if (selectedMidiDevice) {
+                    // MIDI MODE: Start without Microphone
+                    console.log('🚀 Starting Session (MIDI MODE)');
                     setIsActive(true);
                     generateNewNote();
+                } else {
+                    // MICROPHONE MODE
+                    console.log('🚀 Starting Session (MIC MODE)');
+                    const result = await pitchDetector.startPitchDetection(stablePitchHandler, stableVolumeHandler);
+                    setMicPermission(result.permission);
+                    if (result.success) {
+                        setIsActive(true);
+                        generateNewNote();
+                    }
                 }
-            }, [handlePitchDetected, handleVolumeUpdate, generateNewNote]);
+            }, [selectedMidiDevice, stablePitchHandler, stableVolumeHandler, generateNewNote]);
 
             // MIDI Handlers
             const requestMIDIAccess = useCallback(async () => {
@@ -1323,6 +1334,10 @@
                     console.log('🎤 Switched to Microphone input');
                     return;
                 }
+
+                // Switch to MIDI -> STOP MICROPHONE IMMEDIATELY
+                pitchDetector.stopPitchDetection();
+                console.log('🎤 Microphone Stopped (MIDI Exclusive Mode)');
 
                 // Connect to MIDI device
                 const success = midiInput.connectToDevice(deviceId, handlePitchDetected);
