@@ -1157,8 +1157,15 @@
                     console.log('🟡 CLOSE! cents:', cents);
                     setFeedbackStatus('close');
                     setFeedbackMessage('Vicino! / Close!');
+                } else if (!isCorrectNote) {
+                    // Incorrect note logic
+                    console.log('❌ WRONG NOTE:', {
+                        detected: `${detected.note}${detected.octave}`,
+                        target: `${target.note}${target.octave}`
+                    });
+                    setFeedbackStatus('wrong');
+                    setFeedbackMessage(lang === 'it' ? 'Riprova' : 'Try again');
                 }
-                // REMOVED ELSE BLOCK: No negative feedback for wrong notes
             }, [autoMode, generateNewNote, stopTimer]);
 
             const handleVolumeUpdate = useCallback(vol => setVolume(vol), []);
