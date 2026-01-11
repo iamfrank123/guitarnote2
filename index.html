@@ -195,8 +195,8 @@
             it: {
                 title: "Training Musicale",
                 settings: "Configurazione",
-                key: "Tonalità",
-                multiKey: "Tonalità (Selezione multipla)",
+                key: "Nota",
+                multiKey: "Note da generare",
                 scale: "Scala",
                 major: "Maggiore",
                 minor: "Minore",
@@ -229,8 +229,8 @@
             en: {
                 title: "Musical Training",
                 settings: "Settings",
-                key: "Key",
-                multiKey: "Keys (Select multiple)",
+                key: "Note",
+                multiKey: "Notes to generate",
                 scale: "Scale",
                 major: "Major",
                 minor: "Minor",
@@ -698,23 +698,26 @@
             );
         });
 
-        const KeySelector = memo(({ selectedKeys, onToggle, labels }) => {
+        const KeySelector = memo(({ selectedKeys, onToggle, labels, notation }) => {
             const keys = musicTheory.NOTES_INTERNATIONAL;
             return (
                 <div className="space-y-2">
                     <label className="block text-white font-semibold text-sm">
                         {labels.multiKey}
                     </label>
-                    <div className="grid grid-cols-6 gap-2">
+                    <div className="grid grid-cols-4 gap-2">
                         {keys.map(key => {
                             const isSelected = selectedKeys.includes(key);
+                            const noteName = musicTheory.getNoteName(key, notation);
+                            const isLong = noteName.length > 2;
                             return (
                                 <button key={key} onClick={() => onToggle(key)}
-                                    className={`px-3 py-2 rounded-lg font-semibold text-sm btn-hover transition-all
-                                ${isSelected
+                                    className={`h-12 flex items-center justify-center rounded-xl font-bold transition-all btn-hover
+                            ${isLong ? 'text-xs' : 'text-sm'}
+                            ${isSelected
                                             ? 'bg-white text-indigo-600 shadow-lg scale-105'
                                             : 'bg-white/20 text-white hover:bg-white/30'}`}>
-                                    {key}
+                                    {noteName}
                                 </button>
                             );
                         })}
@@ -723,20 +726,6 @@
             );
         });
 
-        const ScaleSelector = memo(({ selectedScale, onChange, labels }) => (
-            <div className="space-y-2">
-                <label className="block text-white font-semibold text-sm">{labels.scale}</label>
-                <div className="flex gap-2">
-                    {['major', 'minor'].map(scale => (
-                        <button key={scale} onClick={() => onChange(scale)}
-                            className={`flex-1 px-4 py-3 rounded-lg font-semibold btn-hover
-                        ${selectedScale === scale ? 'bg-white text-indigo-600 shadow-lg' : 'bg-white/20 text-white hover:bg-white/30'}`}>
-                            {scale === 'major' ? labels.major : labels.minor}
-                        </button>
-                    ))}
-                </div>
-            </div>
-        ));
 
         const NotationToggle = memo(({ notation, onChange, labels }) => (
             <div className="space-y-2">
@@ -916,11 +905,17 @@
         function App() {
             const [lang, setLang] = useState('it');
             const t = TRANSLATIONS[lang];
-            const [selectedKeys, setSelectedKeys] = useState(['C']); // Changed to Array
-            const [scale, setScale] = useState('major');
+            const [selectedKeys, setSelectedKeys] = useState(['C', 'E', 'G']); // Default notes
             const [notation, setNotation] = useState('international');
             const [instrument] = useState('guitar');
             const [autoMode, setAutoMode] = useState(true);
+            const autoModeRef = useRef(true);
+
+            useEffect(() => {
+                autoModeRef.current = autoMode;
+                console.log('>>> [App] autoMode changed to:', autoMode);
+            }, [autoMode]);
+
             const [isActive, setIsActive] = useState(false);
             const [currentNote, setCurrentNote] = useState(null);
             const currentNoteRef = useRef(null); // Fix stale closure bug
@@ -940,22 +935,47 @@
             const timerStartRef = useRef(null);
             const timerIntervalRef = useRef(null);
 
-            const validNotes = useMemo(() => {
-                // Combine valid notes from ALL selected keys
-                const allNotes = selectedKeys.flatMap(k => musicTheory.getValidNotes(k, scale, instrument));
+            // Ref-based callback pattern to avoid stale closures in pitch detector
+            const handlePitchDetectedRef = useRef(null);
+            const handleVolumeUpdateRef = useRef(null);
 
-                // Deduplicate notes (same note+octave might appear in different keys)
-                const uniqueNotes = [];
-                const seen = new Set();
-                for (const n of allNotes) {
-                    const id = `${n.note}${n.octave}`;
-                    if (!seen.has(id)) {
-                        seen.add(id);
-                        uniqueNotes.push(n);
-                    }
+            useEffect(() => {
+                handlePitchDetectedRef.current = handlePitchDetected;
+                handleVolumeUpdateRef.current = handleVolumeUpdate;
+            }, [handlePitchDetected, handleVolumeUpdate]);
+
+            const stablePitchHandler = useCallback((freq) => {
+                if (handlePitchDetectedRef.current) handlePitchDetectedRef.current(freq);
+            }, []);
+
+            const stableVolumeHandler = useCallback((vol) => {
+                if (handleVolumeUpdateRef.current) handleVolumeUpdateRef.current(vol);
+            }, []);
+
+            const validNotes = useMemo(() => {
+                const ranges = {
+                    guitar: { minOct: 2, maxOct: 5 },
+                    piano: { minOct: 2, maxOct: 6 }
+                };
+                const range = ranges[instrument];
+                const notes = [];
+
+                for (let octave = range.minOct; octave <= range.maxOct; octave++) {
+                    selectedKeys.forEach(noteName => {
+                        const freq = musicTheory.calculateFrequency(noteName, octave);
+                        // Hardcoded guitar/piano range checks if needed, but simple octave check is mostly enough
+                        // For guitar, E2 is the lowest, E5 is the highest.
+                        if (instrument === 'guitar') {
+                            const e2 = musicTheory.calculateFrequency('E', 2);
+                            const e5 = musicTheory.calculateFrequency('E', 5);
+                            if (freq >= e2 && freq <= e5) notes.push({ note: noteName, octave, frequency: freq });
+                        } else {
+                            notes.push({ note: noteName, octave, frequency: freq });
+                        }
+                    });
                 }
-                return uniqueNotes;
-            }, [selectedKeys, scale, instrument]);
+                return notes;
+            }, [selectedKeys, instrument]);
 
             const playSystemNote = useCallback((freq, inst) => {
                 // Cancella timer precedente se l'utente clicca velocemente
@@ -1063,11 +1083,12 @@
 
                 if (isCorrectNote && cents <= 25) {
                     console.log('✅ CORRECT! Setting feedback to correct');
+                    console.log('>>> [Detection] autoMode:', autoModeRef.current);
                     isProcessingRef.current = true; // Lock immediately
                     setFeedbackStatus('correct');
                     setFeedbackMessage('Corretto! / Correct!');
                     stopTimer();
-                    if (autoMode) {
+                    if (autoModeRef.current) {
                         // Delay aumentato a 1.5s (1500ms) come richiesto
                         setTimeout(() => generateNewNote(), 1500);
                     }
@@ -1084,13 +1105,13 @@
                     setFeedbackStatus('wrong');
                     setFeedbackMessage(lang === 'it' ? 'Riprova' : 'Try again');
                 }
-            }, [autoMode, generateNewNote, stopTimer, lang]);
+            }, [generateNewNote, stopTimer, lang]);
 
             const handleVolumeUpdate = useCallback(vol => setVolume(vol), []);
 
             const startSession = useCallback(async () => {
                 audioEngine.initAudioContext();
-                const result = await pitchDetector.startPitchDetection(handlePitchDetected, handleVolumeUpdate);
+                const result = await pitchDetector.startPitchDetection(stablePitchHandler, stableVolumeHandler);
                 setMicPermission(result.permission);
                 if (result.success) {
                     setIsActive(true);
@@ -1107,6 +1128,7 @@
                 setHistoryIndex(-1);
                 setFeedbackStatus('idle');
                 setDetectedNote(null);
+                isProcessingRef.current = false; // Reset lock on stop
                 stopTimer();
                 resetTimer();
             }, [stopTimer, resetTimer]);
@@ -1121,6 +1143,7 @@
                 setFeedbackStatus('idle');
                 stopTimer();
                 resetTimer();
+                isProcessingRef.current = false; // Unlock detection when navigating back
             }, [historyIndex, noteHistory, instrument, stopTimer, resetTimer, playSystemNote]);
 
             const goToNextNote = useCallback(() => {
@@ -1134,15 +1157,16 @@
                     setFeedbackStatus('idle');
                     stopTimer();
                     resetTimer();
+                    isProcessingRef.current = false; // Unlock detection for the historical note
                 } else {
                     generateNewNote();
                 }
             }, [autoMode, historyIndex, noteHistory, instrument, generateNewNote, stopTimer, resetTimer, playSystemNote]);
 
             const requestMicPermission = useCallback(async () => {
-                const result = await pitchDetector.startPitchDetection(handlePitchDetected, handleVolumeUpdate);
+                const result = await pitchDetector.startPitchDetection(stablePitchHandler, stableVolumeHandler);
                 setMicPermission(result.permission);
-            }, [handlePitchDetected, handleVolumeUpdate]);
+            }, [stablePitchHandler, stableVolumeHandler]);
 
             useEffect(() => {
                 return () => {
@@ -1167,8 +1191,8 @@
                                         selectedKeys={selectedKeys}
                                         onToggle={toggleKey}
                                         labels={t}
+                                        notation={notation}
                                     />
-                                    <ScaleSelector selectedScale={scale} onChange={setScale} labels={t} />
                                     <NotationToggle notation={notation} onChange={setNotation} labels={t} />
                                     <ModeToggle autoMode={autoMode} onChange={setAutoMode} labels={t} />
                                 </div>
