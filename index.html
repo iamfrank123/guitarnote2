@@ -603,7 +603,7 @@
         // ========== REACT COMPONENTS ==========
         const { useState, useEffect, useRef, useMemo, useCallback, memo } = React;
 
-        const NoteDisplay = memo(({ note, notation, feedbackStatus, instrument, labels }) => {
+        const NoteDisplay = memo(({ note, notation, feedbackStatus, instrument, labels, onPlay }) => {
             if (!note) return null;
             const noteName = musicTheory.getNoteName(note.note, notation);
             const guitarString = instrument === 'guitar' ? musicTheory.getGuitarString(note.note, note.octave) : null;
@@ -612,6 +612,13 @@
             return (
                 <div className={`relative p-8 rounded-3xl border-4 color-transition note-enter ${statusClass} 
             ${feedbackStatus === 'correct' ? 'feedback-correct glow-effect' : ''}`}>
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onPlay && onPlay(); }}
+                        className="absolute top-4 right-4 bg-white/20 hover:bg-white/30 text-white rounded-full p-2 transition-all hover:scale-110 shadow-lg z-10"
+                        title={labels.playNote}
+                    >
+                        <span className="text-xl">🔊</span>
+                    </button>
                     <div className="text-center">
                         <div className="text-8xl md:text-9xl font-bold text-white mb-4">
                             {noteName}
@@ -932,7 +939,8 @@
                 setHistoryIndex(prev => prev + 1);
                 isProcessingRef.current = false; // Unlock detection
 
-                playSystemNote(newNote.frequency, instrument);
+                // Auto-playback removed per user request
+                // playSystemNote(newNote.frequency, instrument); 
 
                 setFeedbackStatus('idle');
                 setFeedbackMessage('');
@@ -1107,7 +1115,14 @@
 
                                 <div className="flex justify-center">
                                     {currentNote ? (
-                                        <NoteDisplay note={currentNote} notation={notation} feedbackStatus={feedbackStatus} instrument={instrument} labels={t} />
+                                        <NoteDisplay
+                                            note={currentNote}
+                                            notation={notation}
+                                            feedbackStatus={feedbackStatus}
+                                            instrument={instrument}
+                                            labels={t}
+                                            onPlay={() => playSystemNote(currentNote.frequency, instrument)}
+                                        />
                                     ) : (
                                         <div className="bg-white/10 backdrop-blur-lg rounded-3xl p-12 text-center">
                                             <p className="text-2xl text-white/60">{t.start}</p>
