@@ -837,20 +837,7 @@
             </div>
         ));
 
-        const InstrumentSelector = memo(({ instrument, onChange, labels }) => (
-            <div className="space-y-2">
-                <label className="block text-white font-semibold text-sm">{labels.instrument}</label>
-                <div className="flex gap-2">
-                    {[{ id: 'guitar', label: labels.guitar }, { id: 'piano', label: labels.piano }].map(inst => (
-                        <button key={inst.id} onClick={() => onChange(inst.id)}
-                            className={`flex-1 px-4 py-3 rounded-lg font-semibold btn-hover
-                        ${instrument === inst.id ? 'bg-white text-indigo-600 shadow-lg' : 'bg-white/20 text-white hover:bg-white/30'}`}>
-                            {inst.label}
-                        </button>
-                    ))}
-                </div>
-            </div>
-        ));
+
 
         const ModeToggle = memo(({ autoMode, onChange, labels }) => (
             <div className="space-y-2">
@@ -1083,7 +1070,7 @@
             }, []);
 
             const generateNewNote = useCallback(() => {
-                const newNote = musicTheory.getRandomNote(validNotes, currentNote);
+                const newNote = musicTheory.getRandomNote(validNotes, currentNoteRef.current);
                 if (!newNote) return;
 
                 setCurrentNote(newNote);
@@ -1261,7 +1248,6 @@
                                     />
                                     <ScaleSelector selectedScale={scale} onChange={setScale} labels={t} />
                                     <NotationToggle notation={notation} onChange={setNotation} labels={t} />
-                                    <InstrumentSelector instrument={instrument} onChange={setInstrument} labels={t} />
                                     <ModeToggle autoMode={autoMode} onChange={setAutoMode} labels={t} />
                                 </div>
                             </div>
